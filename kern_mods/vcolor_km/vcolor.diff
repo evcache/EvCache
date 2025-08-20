@@ -1,0 +1,618 @@
+diff --git a/.gitignore b/.gitignore
+index f2f63e47f..8af3c6731 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -181,3 +181,6 @@ sphinx_*/
+ 
+ # Rust analyzer configuration
+ /rust-project.json
++
++# custom
++setup_kernel
+diff --git a/Makefile b/Makefile
+index 7138d1fab..be76b48f0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -2,7 +2,8 @@
+ VERSION = 6
+ PATCHLEVEL = 15
+ SUBLEVEL = 2
+-EXTRAVERSION =
++EXTRAVERSION = -vcolor2
++LOCALVERSION = ""
+ NAME = Baby Opossum Posse
+ 
+ # *DOCUMENTATION*
+diff --git a/include/linux/gfp_types.h b/include/linux/gfp_types.h
+index 65db9349f..c9577eae2 100644
+--- a/include/linux/gfp_types.h
++++ b/include/linux/gfp_types.h
+@@ -388,5 +388,6 @@ enum {
+ #define GFP_TRANSHUGE_LIGHT	((GFP_HIGHUSER_MOVABLE | __GFP_COMP | \
+ 			 __GFP_NOMEMALLOC | __GFP_NOWARN) & ~__GFP_RECLAIM)
+ #define GFP_TRANSHUGE	(GFP_TRANSHUGE_LIGHT | __GFP_DIRECT_RECLAIM)
++#define GFP_COLOR       ~(__GFP_RECLAIM | __GFP_MOVABLE)
+ 
+ #endif /* __LINUX_GFP_TYPES_H */
+diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
+index 56d07edd0..9b0a74f62 100644
+--- a/include/linux/mm_types.h
++++ b/include/linux/mm_types.h
+@@ -224,6 +224,9 @@ struct page {
+ 	struct page *kmsan_shadow;
+ 	struct page *kmsan_origin;
+ #endif
++#ifdef CONFIG_VCOLOR
++	u8 vcolor;
++#endif
+ } _struct_page_alignment;
+ 
+ /*
+diff --git a/include/linux/pagemap.h b/include/linux/pagemap.h
+index 26baa78f1..1aa91b745 100644
+--- a/include/linux/pagemap.h
++++ b/include/linux/pagemap.h
+@@ -15,6 +15,7 @@
+ #include <linux/bitops.h>
+ #include <linux/hardirq.h> /* for in_interrupt() */
+ #include <linux/hugetlb_inline.h>
++#include <linux/vcolor.h>
+ 
+ struct folio_batch;
+ 
+@@ -460,6 +461,10 @@ mapping_min_folio_order(const struct address_space *mapping)
+ {
+ 	if (!IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE))
+ 		return 0;
++#ifdef CONFIG_VCOLOR
++       if (vcolor_enabled)
++               return 0;
++#endif
+ 	return (mapping->flags & AS_FOLIO_ORDER_MIN_MASK) >> AS_FOLIO_ORDER_MIN;
+ }
+ 
+@@ -640,7 +645,14 @@ struct folio *filemap_alloc_folio_noprof(gfp_t gfp, unsigned int order);
+ #else
+ static inline struct folio *filemap_alloc_folio_noprof(gfp_t gfp, unsigned int order)
+ {
+-	return folio_alloc_noprof(gfp, order);
++#ifdef CONFIG_VCOLOR
++       if (order == 0 && vcolor_enabled) {
++               struct page *p = vcolor_alloc_page(gfp);
++               if (p)
++                       return page_folio(p);
++       }
++#endif
++       return folio_alloc_noprof(gfp, order);
+ }
+ #endif
+ 
+@@ -649,6 +661,11 @@ static inline struct folio *filemap_alloc_folio_noprof(gfp_t gfp, unsigned int o
+ 
+ static inline struct page *__page_cache_alloc(gfp_t gfp)
+ {
++#ifdef CONFIG_VCOLOR
++	struct page *page = vcolor_alloc_page(gfp);
++        if (page)
++                return page;
++#endif
+ 	return &filemap_alloc_folio(gfp, 0)->page;
+ }
+ 
+diff --git a/include/linux/vcolor.h b/include/linux/vcolor.h
+new file mode 100644
+index 000000000..a0895fc0e
+--- /dev/null
++++ b/include/linux/vcolor.h
+@@ -0,0 +1,38 @@
++#ifndef _LINUX_VCOLOR_H
++#define _LINUX_VCOLOR_H
++
++#include <linux/mm_types.h>
++
++#define VCOLOR_MAX_COLORS 16
++#define VCOLOR_NONE 0xff
++
++#ifdef CONFIG_VCOLOR
++extern bool vcolor_enabled;
++extern bool vcolor_bypass;
++extern spinlock_t vcolor_lock;
++extern struct list_head colored_page_list[VCOLOR_MAX_COLORS];
++extern spinlock_t colored_page_locks[VCOLOR_MAX_COLORS];
++extern unsigned long colored_count[VCOLOR_MAX_COLORS];
++extern unsigned long allocated_count[VCOLOR_MAX_COLORS];
++extern char last_alloc_comm[TASK_COMM_LEN];
++extern char writer_comm[TASK_COMM_LEN];
++extern bool any_alloc;
++extern u8 vcolor_order[VCOLOR_MAX_COLORS];
++extern u8 vcolor_hottest;
++struct page *vcolor_alloc_page(gfp_t gfp);
++void vcolor_free_page(struct page *page);
++void vcolor_flush(void);
++void vcolor_release_color(unsigned int color);
++bool vcolor_check_frame_tagged(struct page *page);
++void vcolor_tag_frame(struct page *page, u8 color);
++void vcolor_untag_frame(struct page *page);
++#else
++static inline struct page *vcolor_alloc_page(gfp_t gfp) { return NULL; }
++static inline void vcolor_free_page(struct page *page) {}
++static inline void vcolor_flush(void) {}
++static inline bool vcolor_check_frame_tagged(struct page *page) { return false; }
++static inline void vcolor_tag_frame(struct page *page, u8 color) {}
++static inline void vcolor_untag_frame(struct page *page) {}
++#endif
++
++#endif /* _LINUX_VCOLOR_H */
+diff --git a/mm/Kconfig b/mm/Kconfig
+index e113f713b..50d4ad1fe 100644
+--- a/mm/Kconfig
++++ b/mm/Kconfig
+@@ -1345,4 +1345,9 @@ config PT_RECLAIM
+ 
+ source "mm/damon/Kconfig"
+ 
++config VCOLOR
++       bool "Page coloring support for virtual machines"
++       help
++         Enable experimental colored page allocation for process "vtest".
++
+ endmenu
+diff --git a/mm/Makefile b/mm/Makefile
+index e7f6bbf8a..876fe5cec 100644
+--- a/mm/Makefile
++++ b/mm/Makefile
+@@ -148,3 +148,4 @@ obj-$(CONFIG_SHRINKER_DEBUG) += shrinker_debug.o
+ obj-$(CONFIG_EXECMEM) += execmem.o
+ obj-$(CONFIG_TMPFS_QUOTA) += shmem_quota.o
+ obj-$(CONFIG_PT_RECLAIM) += pt_reclaim.o
++obj-$(CONFIG_VCOLOR) += vcolor.o
+diff --git a/mm/filemap.c b/mm/filemap.c
+index 7b90cbeb4..f9f23a64d 100644
+--- a/mm/filemap.c
++++ b/mm/filemap.c
+@@ -994,6 +994,14 @@ struct folio *filemap_alloc_folio_noprof(gfp_t gfp, unsigned int order)
+ 	int n;
+ 	struct folio *folio;
+ 
++#ifdef CONFIG_VCOLOR
++       if (order == 0 && vcolor_enabled) {
++               struct page *p = vcolor_alloc_page(gfp);
++               if (p)
++                       return page_folio(p);
++       }
++#endif
++
+ 	if (cpuset_do_page_mem_spread()) {
+ 		unsigned int cpuset_mems_cookie;
+ 		do {
+diff --git a/mm/memory.c b/mm/memory.c
+index 491994108..4343f450c 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -76,6 +76,7 @@
+ #include <linux/ptrace.h>
+ #include <linux/vmalloc.h>
+ #include <linux/sched/sysctl.h>
++#include <linux/vcolor.h>
+ 
+ #include <trace/events/kmem.h>
+ 
+@@ -5858,8 +5859,14 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
+ static inline vm_fault_t create_huge_pmd(struct vm_fault *vmf)
+ {
+ 	struct vm_area_struct *vma = vmf->vma;
+-	if (vma_is_anonymous(vma))
++	if (vma_is_anonymous(vma)) {
++#ifdef CONFIG_VCOLOR
++	        if (vcolor_enabled && 
++	           (!strcmp(current->comm, "vtest") || !strcmp(current->comm, "vcolor")))
++                        return VM_FAULT_FALLBACK;
++#endif
+ 		return do_huge_pmd_anonymous_page(vmf);
++	}
+ 	if (vma->vm_ops->huge_fault)
+ 		return vma->vm_ops->huge_fault(vmf, PMD_ORDER);
+ 	return VM_FAULT_FALLBACK;
+diff --git a/mm/mempolicy.c b/mm/mempolicy.c
+index b28a1e6ae..30315ae06 100644
+--- a/mm/mempolicy.c
++++ b/mm/mempolicy.c
+@@ -90,6 +90,7 @@
+ #include <linux/cpuset.h>
+ #include <linux/slab.h>
+ #include <linux/string.h>
++#include <linux/vcolor.h>
+ #include <linux/export.h>
+ #include <linux/nsproxy.h>
+ #include <linux/interrupt.h>
+@@ -2342,14 +2343,23 @@ struct folio *folio_alloc_mpol_noprof(gfp_t gfp, unsigned int order,
+  * Return: The folio on success or NULL if allocation fails.
+  */
+ struct folio *vma_alloc_folio_noprof(gfp_t gfp, int order, struct vm_area_struct *vma,
+-		unsigned long addr)
+-{
+-	struct mempolicy *pol;
+-	pgoff_t ilx;
+-	struct folio *folio;
++               unsigned long addr)
++{
++       struct mempolicy *pol;
++       pgoff_t ilx;
++       struct folio *folio;
++
++#ifdef CONFIG_VCOLOR
++       if (order == 0 && vcolor_enabled && !strcmp(current->comm, "vtest")) {
++       	       //folio->mapping &= ~(PAGE_MAPPING_MOVABLE);
++               struct page *p = vcolor_alloc_page(gfp);
++               if (p)
++                       return page_folio(p);
++       }
++#endif
+ 
+-	if (vma->vm_flags & VM_DROPPABLE)
+-		gfp |= __GFP_NOWARN;
++       if (vma->vm_flags & VM_DROPPABLE)
++               gfp |= __GFP_NOWARN;
+ 
+ 	pol = get_vma_policy(vma, addr, order, &ilx);
+ 	folio = folio_alloc_mpol_noprof(gfp, order, pol, ilx, numa_node_id());
+diff --git a/mm/mm_init.c b/mm/mm_init.c
+index eedce9321..cfecea5fb 100644
+--- a/mm/mm_init.c
++++ b/mm/mm_init.c
+@@ -31,6 +31,7 @@
+ #include <linux/execmem.h>
+ #include <linux/vmstat.h>
+ #include <linux/hugetlb.h>
++#include <linux/vcolor.h>
+ #include "internal.h"
+ #include "slab.h"
+ #include "shuffle.h"
+@@ -578,10 +579,13 @@ static void __init find_zone_movable_pfns_for_nodes(void)
+ }
+ 
+ void __meminit __init_single_page(struct page *page, unsigned long pfn,
+-				unsigned long zone, int nid)
++                                unsigned long zone, int nid)
+ {
+-	mm_zero_struct_page(page);
+-	set_page_links(page, zone, nid, pfn);
++        mm_zero_struct_page(page);
++#ifdef CONFIG_VCOLOR
++       page->vcolor = VCOLOR_NONE;
++#endif
++        set_page_links(page, zone, nid, pfn);
+ 	init_page_count(page);
+ 	atomic_set(&page->_mapcount, -1);
+ 	page_cpupid_reset_last(page);
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index 47fa713cc..e749e1b18 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -51,6 +51,7 @@
+ #include <linux/ftrace.h>
+ #include <linux/lockdep.h>
+ #include <linux/psi.h>
++#include <linux/vcolor.h>
+ #include <linux/khugepaged.h>
+ #include <linux/delayacct.h>
+ #include <linux/cacheinfo.h>
+@@ -2705,13 +2706,29 @@ static void free_frozen_page_commit(struct zone *zone,
+  * Free a pcp page
+  */
+ static void __free_frozen_pages(struct page *page, unsigned int order,
+-				fpi_t fpi_flags)
+-{
+-	unsigned long __maybe_unused UP_flags;
+-	struct per_cpu_pages *pcp;
+-	struct zone *zone;
+-	unsigned long pfn = page_to_pfn(page);
+-	int migratetype;
++                                fpi_t fpi_flags)
++{
++        unsigned long __maybe_unused UP_flags;
++        struct per_cpu_pages *pcp;
++        struct zone *zone;
++        unsigned long pfn = page_to_pfn(page);
++        int migratetype;
++
++#ifdef CONFIG_VCOLOR
++       if (vcolor_check_frame_tagged(page)) {
++               if (vcolor_enabled && !vcolor_bypass) {
++                       if (!free_pages_prepare(page, order))
++                               return;
++                       if (order)
++                               split_page(page, order);
++                       for (int k = 0; k < (1 << order); k++)
++                               vcolor_free_page(page + k);
++                       return;
++               } else if (!vcolor_enabled) {
++                       vcolor_untag_frame(page);
++               }
++       }
++#endif
+ 
+ 	if (!pcp_allowed_order(order)) {
+ 		__free_pages_ok(page, order, fpi_flags);
+@@ -2774,6 +2791,21 @@ void free_unref_folios(struct folio_batch *folios)
+ 		struct folio *folio = folios->folios[i];
+ 		unsigned long pfn = folio_pfn(folio);
+ 		unsigned int order = folio_order(folio);
++#ifdef CONFIG_VCOLOR
++               if (vcolor_check_frame_tagged(&folio->page)) {
++                       if (vcolor_enabled && !vcolor_bypass) {
++                               if (!free_pages_prepare(&folio->page, order))
++                                       continue;
++                               if (order)
++                                       split_page(&folio->page, order);
++                               for (int k = 0; k < (1 << order); k++)
++                                       vcolor_free_page(&folio->page + k);
++                               continue;
++                       } else if (!vcolor_enabled) {
++                               vcolor_untag_frame(&folio->page);
++                       }
++               }
++#endif
+ 
+ 		if (!free_pages_prepare(&folio->page, order))
+ 			continue;
+diff --git a/mm/vcolor.c b/mm/vcolor.c
+new file mode 100644
+index 000000000..18cc766c3
+--- /dev/null
++++ b/mm/vcolor.c
+@@ -0,0 +1,254 @@
++#include <linux/mm.h>
++#include <linux/slab.h>
++#include <linux/vcolor.h>
++#include <linux/spinlock.h>
++#include <linux/list.h>
++#include <linux/sched.h>
++#include <linux/string.h> // strscpy. strlcpy apparently was removed in 6.8.xx
++#include <linux/module.h> // module_licens(GPL)
++#include "internal.h"
++#include <linux/page_owner.h>
++
++struct tagged_entry {
++    struct list_head list;
++    struct page *page;
++};
++
++DEFINE_SPINLOCK(vcolor_lock);
++LIST_HEAD(tagged_frames);
++struct list_head colored_page_list[VCOLOR_MAX_COLORS];
++spinlock_t colored_page_locks[VCOLOR_MAX_COLORS];
++unsigned long colored_count[VCOLOR_MAX_COLORS];
++unsigned long allocated_count[VCOLOR_MAX_COLORS];
++bool vcolor_enabled;
++bool vcolor_bypass;
++char last_alloc_comm[TASK_COMM_LEN] = "none";
++char writer_comm[TASK_COMM_LEN] = "none";
++bool any_alloc;
++u8 vcolor_order[VCOLOR_MAX_COLORS];
++u8 vcolor_hottest;
++
++static int __init vcolor_core_init(void)
++{
++    int i;
++    for (i = 0; i < VCOLOR_MAX_COLORS; i++) {
++        INIT_LIST_HEAD(&colored_page_list[i]);
++        spin_lock_init(&colored_page_locks[i]);
++        vcolor_order[i] = i;
++    }
++    vcolor_hottest = 0;
++    return 0;
++}
++subsys_initcall(vcolor_core_init);
++
++EXPORT_SYMBOL(vcolor_lock);
++EXPORT_SYMBOL(colored_page_list);
++EXPORT_SYMBOL(colored_page_locks);
++EXPORT_SYMBOL(colored_count);
++EXPORT_SYMBOL(allocated_count);
++EXPORT_SYMBOL(vcolor_enabled);
++EXPORT_SYMBOL(vcolor_bypass);
++EXPORT_SYMBOL(last_alloc_comm);
++EXPORT_SYMBOL(writer_comm);
++EXPORT_SYMBOL(any_alloc);
++EXPORT_SYMBOL(vcolor_order);
++EXPORT_SYMBOL(vcolor_hottest);
++
++bool vcolor_check_frame_tagged(struct page *page)
++{
++    return page->vcolor != VCOLOR_NONE;
++}
++EXPORT_SYMBOL(vcolor_check_frame_tagged);
++
++void vcolor_untag_frame(struct page *page)
++{
++    struct tagged_entry *e, *tmp;
++    u8 color;
++
++    spin_lock(&vcolor_lock);
++    color = page->vcolor;
++    if (color == VCOLOR_NONE) {
++        spin_unlock(&vcolor_lock);
++        return;
++    }
++
++    list_for_each_entry_safe(e, tmp, &tagged_frames, list) {
++        if (e->page == page) {
++            list_del(&e->list);
++            kfree(e);
++            break;
++        }
++    }
++
++    page->vcolor = VCOLOR_NONE;
++    spin_unlock(&vcolor_lock);
++    if (!vcolor_bypass && color < VCOLOR_MAX_COLORS) {
++        spin_lock(&colored_page_locks[color]);
++        if (allocated_count[color])
++            allocated_count[color]--;
++        spin_unlock(&colored_page_locks[color]);
++    }
++}
++EXPORT_SYMBOL(vcolor_untag_frame);
++
++void vcolor_tag_frame(struct page *page, u8 color)
++{
++    struct tagged_entry *e;
++
++    if (page->vcolor != VCOLOR_NONE)
++        return;
++
++    e = kmalloc(sizeof(*e), GFP_KERNEL);
++    if (!e)
++        return;
++
++    page->vcolor = color;
++    INIT_LIST_HEAD(&e->list);
++    e->page = page;
++
++    spin_lock(&vcolor_lock);
++    list_add(&e->list, &tagged_frames);
++    spin_unlock(&vcolor_lock);
++}
++EXPORT_SYMBOL(vcolor_tag_frame);
++
++struct page *vcolor_alloc_page(gfp_t gfp)
++{
++    gfp &= GFP_COLOR;
++    int i;
++    struct page *page = NULL;
++    struct tagged_entry *t;
++
++    if (!vcolor_enabled)
++        return NULL;
++
++    for (i = 0; i < VCOLOR_MAX_COLORS; i++) {
++        u8 idx = vcolor_order[i];
++        spin_lock(&colored_page_locks[idx]);
++        if (!list_empty(&colored_page_list[idx])) {
++            t = list_first_entry(&colored_page_list[idx], struct tagged_entry, list);
++            list_del(&t->list);
++            colored_count[idx]--;
++            page = t->page;
++            allocated_count[idx]++;
++            any_alloc = true;
++            strscpy(last_alloc_comm, current->comm, TASK_COMM_LEN);
++            spin_unlock(&colored_page_locks[idx]);
++            kfree(t);
++            break;
++        }
++        spin_unlock(&colored_page_locks[idx]);
++    }
++
++    if (page) {
++        set_page_refcounted(page);
++        post_alloc_hook(page, 0, gfp);
++        clear_page_pfmemalloc(page);
++    }
++
++    return page;
++}
++EXPORT_SYMBOL(vcolor_alloc_page);
++
++void vcolor_free_page(struct page *page)
++{
++    u8 color = page->vcolor;
++    struct tagged_entry *t;
++
++    if (color == VCOLOR_NONE)
++        return;
++
++    t = kmalloc(sizeof(*t), GFP_ATOMIC);
++    if (!t)
++        return;
++    t->page = page;
++    INIT_LIST_HEAD(&t->list);
++
++    spin_lock(&colored_page_locks[color]);
++    list_add(&t->list, &colored_page_list[color]);
++    colored_count[color]++;
++    if (allocated_count[color])
++        allocated_count[color]--;
++    spin_unlock(&colored_page_locks[color]);
++}
++EXPORT_SYMBOL(vcolor_free_page);
++
++void vcolor_release_color(unsigned int color)
++{
++    struct tagged_entry *e, *tmp;
++
++    if (color >= VCOLOR_MAX_COLORS)
++        return;
++
++    spin_lock(&colored_page_locks[color]);
++    list_for_each_entry_safe(e, tmp, &colored_page_list[color], list) {
++        list_del(&e->list);
++        colored_count[color]--;
++        e->page->vcolor = VCOLOR_NONE;
++        spin_unlock(&colored_page_locks[color]);
++        vcolor_bypass = true;
++        set_page_refcounted(e->page);
++        __free_pages(e->page, 0);
++        vcolor_untag_frame(e->page);
++        vcolor_bypass = false;
++        kfree(e);
++        spin_lock(&colored_page_locks[color]);
++    }
++    colored_count[color] = 0;
++    allocated_count[color] = 0;
++    spin_unlock(&colored_page_locks[color]);
++
++    spin_lock(&vcolor_lock);
++    list_for_each_entry_safe(e, tmp, &tagged_frames, list) {
++        if (page_count(e->page) == 0) {
++            list_del(&e->list);
++            kfree(e);
++        }
++    }
++    spin_unlock(&vcolor_lock);
++}
++EXPORT_SYMBOL(vcolor_release_color);
++
++void vcolor_flush(void)
++{
++    int i;
++    struct tagged_entry *e, *tmp;
++
++    spin_lock(&vcolor_lock);
++    vcolor_enabled = false;
++    spin_unlock(&vcolor_lock);
++
++    for (i = 0; i < VCOLOR_MAX_COLORS; i++) {
++        spin_lock(&colored_page_locks[i]);
++        list_for_each_entry_safe(e, tmp, &colored_page_list[i], list) {
++            list_del(&e->list);
++            colored_count[i]--;
++            e->page->vcolor = VCOLOR_NONE;
++            spin_unlock(&colored_page_locks[i]);
++            set_page_refcounted(e->page);
++            __free_pages(e->page, 0);
++            vcolor_untag_frame(e->page);
++            kfree(e);
++            spin_lock(&colored_page_locks[i]);
++        }
++        colored_count[i] = 0;
++        allocated_count[i] = 0;
++        spin_unlock(&colored_page_locks[i]);
++    }
++
++    spin_lock(&vcolor_lock);
++    list_for_each_entry_safe(e, tmp, &tagged_frames, list) {
++        if (page_count(e->page) == 0) {
++            e->page->vcolor = VCOLOR_NONE;
++            list_del(&e->list);
++            kfree(e);
++        }
++    }
++    any_alloc = false;
++    strcpy(last_alloc_comm, "none");
++    strcpy(writer_comm, "none");
++    spin_unlock(&vcolor_lock);
++}
++EXPORT_SYMBOL(vcolor_flush);
++
++MODULE_LICENSE("GPL");
