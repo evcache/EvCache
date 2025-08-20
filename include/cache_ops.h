@@ -9,17 +9,6 @@
 extern "C" {
 #endif
 
-/*
-  insert a cache line into the L2 cache
-  This procedure is crafted based on Intel Xeon Scalable's
-  cache replacement policies when a miss in all cache levels occurs.
-  See:
-  https://www.intel.com/content/www/us/en/developer/articles/technical/xeon-processor-scalable-family-technical-overview.html
-  Gist: Upon a miss in all cache levels for data `x`, the CPU brings the line
-  into the MLC (Mid-Level Cache), which in our case is the L2
-*/
-//void l2_insert_seq(u8** cands, u8* target_addr);
-
 static inline void flush_array(u8 **addrs, u64 size)
 {
     u64 i;
