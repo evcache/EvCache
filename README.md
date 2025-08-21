@@ -32,7 +32,7 @@ detailed usage instructions.
 
 EvCache showcases two techniques that build on these utilities.
 
-### LCAS - LLC Contention-Aware task Scheduling
+### LCAS - LLC Contention-Aware Task Scheduling
 
 LCAS extends the `scx_rusty` sched_ext scheduler and leverages `vset` with the
 `--lcas` option to probe socket-level contention. Instructions for building and
