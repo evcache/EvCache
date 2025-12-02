@@ -17,8 +17,6 @@ CONFIG_BPF_JIT=y
 CONFIG_DEBUG_INFO_BTF=y
 CONFIG_BPF_JIT_ALWAYS_ON=y
 CONFIG_BPF_JIT_DEFAULT_ON=y
-CONFIG_PAHOLE_HAS_SPLIT_BTF=y
-CONFIG_PAHOLE_HAS_BTF_TAG=y
 ```
 
 If some options do not appear in the configuration TUI, make sure debug info is
