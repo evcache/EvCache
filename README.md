@@ -2,7 +2,6 @@
 
 > [!WARNING]  
 > If compiling on a CVM, please first switch to the `cvm-build` branch before following the instructions below.
-> You are on the `cvm-build` branch!
 > If compiling within traditional VMs hosted on e.g. SKX processors, use the `master` branch.
 
 EvCache offers a set of utilities along with
