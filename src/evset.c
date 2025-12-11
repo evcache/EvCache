@@ -13,7 +13,7 @@
 #include <pthread.h>
 #include <limits.h>
 
-#define FILTER_BATCH 1
+#define FILTER_BATCH 0
 
 // for cand filtering
 static pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -734,7 +734,7 @@ void init_def_l2_conf(EvBuildConf* conf)
     conf->access_cnt = 3;
     conf->lower_ev = NULL; // for L3/LLC conf
     conf->need_helper = false;
-    conf->flush_cands = false;
+    conf->flush_cands = true;
     conf->foreign_evictor = false;
     conf->cand_traverse = addrs_traverse;
     conf->test = test_eviction;
@@ -1567,7 +1567,8 @@ EvSet** build_single_l3_evset(void)
     
     EvSet* l2_evset = NULL;
     l2_build_start = time_us();
-    l2_evset = build_single_l2_evset(NULL, NULL, 0, NULL, 0);
+    //l2_evset = build_single_l2_evset(NULL, NULL, 0, NULL, 0);
+    l2_evset = build_l2_evset(64)[0][0];
     l2_build_end = time_us();
 
     if (!l2_evset) {
