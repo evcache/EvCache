@@ -1,0 +1,27 @@
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+*.cmake
+compile_commands.json
+
+#swp files by editors
+*.swp
+
+# obj files
+*.o
+
+# module related
+*.cmd
+*.ko
+*.symvers
+*.order
+*.mod
+*.mod.c
+
+# build dirs
+build/**
+Build/**
+
+venv/
